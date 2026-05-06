@@ -38,10 +38,11 @@ find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
-# Set Open3D path - modify this to your installation path
-set(Open3D_DIR "/home/yundrone/open3d141/lib/cmake/Open3D")
-
-# set(Open3D_DIR "/home/unitree/open3d141_arm/open3d141/lib/cmake/Open3D")
+# Set Open3D_DIR through cmake args or environment when Open3D is not in a
+# standard CMake package path.
+if(NOT Open3D_DIR AND DEFINED ENV{Open3D_DIR})
+        set(Open3D_DIR "$ENV{Open3D_DIR}")
+endif()
 find_package(Open3D REQUIRED)
 
 # Fix Open3D libraries - remove problematic .so files

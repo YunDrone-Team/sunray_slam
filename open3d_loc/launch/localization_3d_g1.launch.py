@@ -37,7 +37,13 @@ def generate_launch_description():
         'map_file',
         default_value=os.getenv(
             'RELOC_MAP_FILE',
-            '/home/yundrone/drone3plot/scripts/reloc/data/office.ply'
+            os.path.abspath(os.path.join(
+                os.path.dirname(__file__),
+                '..',
+                '..',
+                'data',
+                'office.ply'
+            ))
         ),
         description='Point cloud map path for open3d_loc'
     )

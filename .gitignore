@@ -12,9 +12,12 @@ __pycache__/
 *.sqlite3
 
 *.pcd
-*.ply
 *.las
 *.laz
 *.pcld
+
+*.ply
+!data/
+!data/*.ply
 
 .DS_Store
