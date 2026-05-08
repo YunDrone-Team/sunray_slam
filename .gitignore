@@ -17,7 +17,5 @@ __pycache__/
 *.pcld
 
 *.ply
-!data/
-!data/*.ply
 
 .DS_Store
