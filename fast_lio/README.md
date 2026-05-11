@@ -163,7 +163,7 @@ Edit ``` config/avia.yaml ``` to set the below parameters:
 <img src="doc/results/HKU_LG_Indoor.png" width=47% />
 <img src="doc/results/HKU_MB_002.png" width = 51% >
 
-Files: Can be downloaded from [google drive](https://drive.google.com/drive/folders/1CGYEJ9-wWjr8INyan6q1BZz_5VtGB-fP?usp=sharing)**!!!This ros1 bag should be convert to ros2!!!**
+Files: Can be downloaded from [google drive](https://drive.google.com/drive/folders/1CGYEJ9-wWjr8INyan6q1BZz_5VtGB-fP?usp=sharing). Use ROS2 bag data with this project.
 
 Run:
 ```bash
@@ -176,12 +176,12 @@ ros2 bag play <your_bag_dir>
 
 **NCLT Dataset**: Original bin file can be found [here](http://robots.engin.umich.edu/nclt/).
 
-We produce [Rosbag Files](https://drive.google.com/drive/folders/1VBK5idI1oyW0GC_I_Hxh63aqam3nocNK?usp=sharing) and [a python script](https://drive.google.com/file/d/1leh7DxbHx29DyS1NJkvEfeNJoccxH7XM/view) to generate Rosbag files: ```python3 sensordata_to_rosbag_fastlio.py bin_file_dir bag_name.bag```**!!!This ros1 bag should be convert to ros2!!!** To convert ros1 bag to ros2 bag, please follow the documentation [Convert rosbag versions](https://ternaris.gitlab.io/rosbags/topics/convert.html)
+Use ROS2 bag data when replaying datasets with this project.
     
 Run:
-```
-roslaunch fast_lio mapping_velodyne.launch
-rosbag play YOUR_DOWNLOADED.bag
+```bash
+ros2 launch fast_lio mapping_velodyne.launch.py
+ros2 bag play <your_bag_dir>
 ```
 
 ## 5.Implementation on UAV

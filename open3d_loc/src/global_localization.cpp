@@ -1,18 +1,42 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/wait_for_message.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#if __has_include(<tf2_ros/transform_broadcaster.hpp>)
 #include <tf2_ros/transform_broadcaster.hpp>
+#else
+#include <tf2_ros/transform_broadcaster.h>
+#endif
+#if __has_include(<tf2_ros/transform_listener.hpp>)
 #include <tf2_ros/transform_listener.hpp>
+#else
+#include <tf2_ros/transform_listener.h>
+#endif
+#if __has_include(<tf2_ros/buffer.hpp>)
 #include <tf2_ros/buffer.hpp>
+#else
+#include <tf2_ros/buffer.h>
+#endif
+#if __has_include(<tf2_geometry_msgs/tf2_geometry_msgs.hpp>)
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#else
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#endif
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#if __has_include(<tf2_ros/static_transform_broadcaster.hpp>)
 #include <tf2_ros/static_transform_broadcaster.hpp>
+#else
+#include <tf2_ros/static_transform_broadcaster.h>
+#endif
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/float32.hpp>
 
+#if __has_include(<tf2_eigen/tf2_eigen.hpp>)
 #include <tf2_eigen/tf2_eigen.hpp>
+#else
+#include <tf2_eigen/tf2_eigen.h>
+#endif
 #include <queue>
 #include <cmath>
 #include <string>
@@ -294,11 +318,12 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     pcd_map_fine_.reset(new open3d::geometry::PointCloud);
     queue_maxsize_ = 5;
 
-    pub_baselink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map", 100000);
-    pub_baselink2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map_kalman", 100000);
-    pub_motionlink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/motionlink2map", 100000);
-    pub_odom2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map", 100000);
-    pub_odom2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map_kalman", 100000);
+    auto odom_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+    pub_baselink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map", odom_qos);
+    pub_baselink2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map_kalman", odom_qos);
+    pub_motionlink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/motionlink2map", odom_qos);
+    pub_odom2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map", odom_qos);
+    pub_odom2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map_kalman", odom_qos);
 
     pub_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/map", 1);
     pub_submap_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/submap", 1);

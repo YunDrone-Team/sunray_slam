@@ -15,7 +15,18 @@ if [[ -n "${ENV_FILE}" ]]; then
   set +a
 fi
 
-: "${ROS_SETUP_BASH:=/opt/ros/humble/setup.bash}"
+if [[ -z "${ROS_SETUP_BASH:-}" ]]; then
+  if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
+    ROS_SETUP_BASH="/opt/ros/${ROS_DISTRO}/setup.bash"
+  elif [[ -f /opt/ros/humble/setup.bash ]]; then
+    ROS_SETUP_BASH=/opt/ros/humble/setup.bash
+  elif [[ -f /opt/ros/foxy/setup.bash ]]; then
+    ROS_SETUP_BASH=/opt/ros/foxy/setup.bash
+  else
+    ROS_SETUP_BASH=/opt/ros/humble/setup.bash
+  fi
+fi
+: "${ROS_SETUP_BASH:?ROS_SETUP_BASH is required}"
 : "${LOCALIZATION_WS_ROOT:=${SUNRAY_SLAM_ROOT}/.runtime/localization_ws}"
 : "${LOCALIZATION_WS_SETUP_BASH:=${LOCALIZATION_WS_ROOT}/install/setup.bash}"
 : "${SUNRAY_RUN_DIR:=${SUNRAY_SLAM_ROOT}/.runtime/run}"

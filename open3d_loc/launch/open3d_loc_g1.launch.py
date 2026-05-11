@@ -12,6 +12,8 @@ def generate_launch_description():
     open3d_loc_share = FindPackageShare('open3d_loc')
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_file = LaunchConfiguration('map_file')
+    pcd_queue_maxsize = int(os.getenv('RELOC_OPEN3D_PCD_QUEUE_MAXSIZE', '5'))
+    init_fitness_threshold = float(os.getenv('RELOC_OPEN3D_INIT_FITNESS_THRESHOLD', '0.75'))
 
     # 声明 use_sim_time 参数
     use_sim_time_arg = DeclareLaunchArgument(
@@ -78,11 +80,11 @@ def generate_launch_description():
             config_file,
             {
                 'path_map': map_file,
-                'pcd_queue_maxsize': 5,
+                'pcd_queue_maxsize': pcd_queue_maxsize,
                 'voxelsize_coarse': 0.5,
                 'voxelsize_fine': 0.1,
                 'threshold_fitness': 0.4,
-                'threshold_fitness_init': 0.4,
+                'threshold_fitness_init': init_fitness_threshold,
                 'loc_frequence': 5.0,
                 'save_scan': False,
                 'hidden_removal': False,

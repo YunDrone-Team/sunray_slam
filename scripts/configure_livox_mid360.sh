@@ -21,14 +21,14 @@ livox_ros_driver2 config files.
 Defaults:
   --iface eth0
   --apply
-  --host-ip auto
-  --config livox_ros_driver2/config/MID360s_config.json
-  --config livox_ros_driver2/config/MID360_config.json
+  update .runtime/localization_ws/src/livox_ros_driver2/config/MID360s_config.json
+  update .runtime/localization_ws/src/livox_ros_driver2/config/MID360_config.json
+  fallback to bundled livox_ros_driver2/config files when .runtime is absent
 
 Options:
   -i, --iface <name>      Ethernet interface to sniff
   -t, --timeout <sec>     Discovery timeout seconds
-  --host-ip <ip|auto>     Host IP to write
+  --host-ip <ip|auto>     Deprecated; host IP is printed but not written
   --config <path>         Config file to update; can be repeated
   --dry-run               Discover and print only
   --no-sudo               Do not prefix tcpdump with sudo
@@ -78,13 +78,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-if [[ "${#CONFIGS[@]}" -eq 0 ]]; then
-  CONFIGS=(
-    "${SUNRAY_SLAM_ROOT}/livox_ros_driver2/config/MID360s_config.json"
-    "${SUNRAY_SLAM_ROOT}/livox_ros_driver2/config/MID360_config.json"
-  )
-fi
 
 args=(
   "${SCRIPT_DIR}/livox_mid360_autoconfig.py"

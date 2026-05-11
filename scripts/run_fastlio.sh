@@ -5,7 +5,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sunray_env.sh"
 source_ros_env
 
 LIVOX_TOPIC_WAIT_TIMEOUT_SEC="${LIVOX_TOPIC_WAIT_TIMEOUT_SEC:-300}"
-LIVOX_SETTLE_SEC="${LIVOX_SETTLE_SEC:-3}"
+LIVOX_SETTLE_SEC="${LIVOX_SETTLE_SEC:-10}"
+SLAM_MIN_BOOT_AGE_SEC="${SLAM_MIN_BOOT_AGE_SEC:-45}"
 LIVOX_HOST_IFACE="${LIVOX_HOST_IFACE:-eth0}"
 LIVOX_HOST_IP="${LIVOX_HOST_IP:-192.168.1.5}"
 STARTUP_TIMING_FILE="${STARTUP_TIMING_FILE:-${SUNRAY_RUN_DIR}/startup_timing.log}"
@@ -28,7 +29,8 @@ start_group() {
   local name="$1"
   local cmd="$2"
   local pid_file="${SUNRAY_RUN_DIR}/${name}.pid"
-  setsid bash -lc "${cmd}" >>"${SUNRAY_LOG_DIR}/${name}.log" 2>&1 &
+  local log_file="${SUNRAY_LOG_DIR}/${name}.log"
+  setsid bash -lc "${cmd}" > >(tee -a "${log_file}" | sed -u "s/^/[${name}] /") 2>&1 &
   local pid=$!
   printf '%s\n' "${pid}" > "${pid_file}"
   log "started ${name} pgid=${pid}"
@@ -53,10 +55,24 @@ wait_for_topic_message() {
   local topic="$1"
   local timeout_sec="$2"
   log "waiting for first message on ${topic}"
-  timeout "${timeout_sec}" ros2 topic echo --once "${topic}" >/dev/null 2>&1 || {
+  timeout "${timeout_sec}" bash -lc "ros2 topic echo '${topic}' | head -n 1 >/dev/null" >/dev/null 2>&1 || {
     log "timed out waiting for first message on ${topic}"
     exit 1
   }
+}
+
+wait_for_min_boot_age() {
+  local min_boot_age_sec="$1"
+  [[ "${min_boot_age_sec}" =~ ^[0-9]+$ ]] || min_boot_age_sec=0
+  while true; do
+    local uptime_sec
+    uptime_sec="$(awk '{printf "%d\n", $1}' /proc/uptime)"
+    if (( uptime_sec >= min_boot_age_sec )); then
+      return 0
+    fi
+    log "waiting for boot age ${min_boot_age_sec}s (current=${uptime_sec}s)"
+    sleep 1
+  done
 }
 
 wait_for_host_ip() {
@@ -87,6 +103,7 @@ mkdir -p "${SUNRAY_RUN_DIR}" "${SUNRAY_LOG_DIR}"
 record_timing script_start
 wait_for_host_ip "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 record_timing livox_host_ip_ready
+wait_for_min_boot_age "${SLAM_MIN_BOOT_AGE_SEC}"
 start_group livox 'exec ros2 launch livox_ros_driver2 msg_MID360s_launch.py'
 record_timing livox_started
 wait_for_topic /livox/lidar "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"

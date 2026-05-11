@@ -50,6 +50,22 @@ if [[ ! -f "${ROS_SETUP_BASH}" ]]; then
   exit 1
 fi
 
+if [[ -z "${Open3D_DIR:-}" ]]; then
+  for candidate in \
+    "${HOME}/open3d141/lib/cmake/Open3D" \
+    "${HOME}/open3d/lib/cmake/Open3D" \
+    /usr/local/lib/cmake/Open3D \
+    /usr/lib/cmake/Open3D \
+    /usr/lib/aarch64-linux-gnu/cmake/Open3D \
+    /usr/lib/x86_64-linux-gnu/cmake/Open3D; do
+    if [[ -f "${candidate}/Open3DConfig.cmake" || -f "${candidate}/open3d-config.cmake" ]]; then
+      export Open3D_DIR="${candidate}"
+      log "auto-detected Open3D_DIR: ${Open3D_DIR}"
+      break
+    fi
+  done
+fi
+
 mkdir -p "${SRC_DIR}"
 rm -f "${SRC_DIR}/FAST_LIO"
 ln -sfn "${FAST_LIO_ROOT}" "${SRC_DIR}/fast_lio"
@@ -73,4 +89,12 @@ source "${ROS_SETUP_BASH}"
 set -u
 
 cd "${LOCALIZATION_WS_ROOT}"
-colcon build --symlink-install "$@"
+cmake_args=(-DROS_EDITION=ROS2)
+if [[ -n "${ROS_DISTRO:-}" ]]; then
+  cmake_args+=("-DDISTRO_ROS=${ROS_DISTRO}")
+fi
+if [[ -n "${Open3D_DIR:-}" ]]; then
+  cmake_args+=("-DOpen3D_DIR=${Open3D_DIR}")
+fi
+
+colcon build --symlink-install --cmake-args "${cmake_args[@]}" "$@"
