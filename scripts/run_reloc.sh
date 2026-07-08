@@ -13,6 +13,9 @@ RELOC_FASTLIO_CONFIG_FILE="${RELOC_FASTLIO_CONFIG_FILE:-mid360.yaml}"
 RELOC_LIVOX_HOST_IFACE="${RELOC_LIVOX_HOST_IFACE:-${LIVOX_HOST_IFACE:-eth0}}"
 RELOC_LIVOX_HOST_IP="${RELOC_LIVOX_HOST_IP:-${LIVOX_HOST_IP:-192.168.1.5}}"
 RELOC_STARTUP_TIMING_FILE="${RELOC_STARTUP_TIMING_FILE:-${SUNRAY_RUN_DIR}/startup_timing.log}"
+RELOC_USE_EXISTING_FASTLIO="${RELOC_USE_EXISTING_FASTLIO:-false}"
+RELOC_ALLOW_PRIVATE_FASTLIO="${RELOC_ALLOW_PRIVATE_FASTLIO:-true}"
+RELOC_EXISTING_FASTLIO_WAIT_SEC="${RELOC_EXISTING_FASTLIO_WAIT_SEC:-30}"
 
 log() {
   printf '[sunray-reloc] %s\n' "$*"
@@ -39,6 +42,13 @@ start_group() {
   local pid=$!
   printf '%s\n' "${pid}" > "${pid_file}"
   log "started ${name} pgid=${pid}"
+}
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 stop_group() {
@@ -105,11 +115,44 @@ wait_for_topic_message() {
   }
 }
 
+topic_ready() {
+  local topic="$1"
+  local timeout_sec="$2"
+  local deadline=$((SECONDS + timeout_sec))
+  while (( SECONDS < deadline )); do
+    if ros2 topic list 2>/dev/null | grep -qx "${topic}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+topic_message_ready() {
+  local topic="$1"
+  local timeout_sec="$2"
+  timeout "${timeout_sec}" bash -lc "ros2 topic echo '${topic}' | head -n 1 >/dev/null" >/dev/null 2>&1
+}
+
+existing_fastlio_ready() {
+  local timeout_sec="$1"
+  topic_ready /livox/lidar "${timeout_sec}" || return 1
+  topic_ready /livox/imu "${timeout_sec}" || return 1
+  topic_ready /Odometry_loc "${timeout_sec}" || return 1
+  topic_ready /cloud_registered_1 "${timeout_sec}" || return 1
+  topic_message_ready /livox/lidar "${timeout_sec}" || return 1
+  topic_message_ready /livox/imu "${timeout_sec}" || return 1
+  topic_message_ready /Odometry_loc "${timeout_sec}" || return 1
+  topic_message_ready /cloud_registered_1 "${timeout_sec}" || return 1
+}
+
 cleanup() {
   stop_group open3d_loc
-  stop_group fastlio
-  stop_group livox
-  "${SUNRAY_SLAM_ROOT}/scripts/stop_localization.sh" || true
+  if [[ "${STARTED_PRIVATE_FASTLIO:-false}" == "true" ]]; then
+    stop_group fastlio
+    stop_group livox
+    "${SUNRAY_SLAM_ROOT}/scripts/stop_localization.sh" || true
+  fi
 }
 
 trap 'cleanup; exit 0' TERM INT
@@ -132,33 +175,57 @@ record_timing livox_host_ip_ready
 wait_for_min_boot_age "${RELOC_MIN_BOOT_AGE_SEC}"
 record_timing min_boot_age_ready
 
-start_group livox 'exec ros2 launch livox_ros_driver2 msg_MID360s_launch.py'
-record_timing livox_started
-wait_for_topic /livox/lidar "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-wait_for_topic /livox/imu "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-record_timing livox_topics_ready
-wait_for_topic_message /livox/lidar "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-wait_for_topic_message /livox/imu "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-record_timing livox_messages_ready
-sleep "${RELOC_LIVOX_SETTLE_SEC}"
-record_timing livox_settle_complete
+STARTED_PRIVATE_FASTLIO=false
+USING_EXISTING_FASTLIO=false
+if is_truthy "${RELOC_USE_EXISTING_FASTLIO}"; then
+  log "checking existing FAST-LIO topics for up to ${RELOC_EXISTING_FASTLIO_WAIT_SEC}s"
+  if existing_fastlio_ready "${RELOC_EXISTING_FASTLIO_WAIT_SEC}"; then
+    record_timing existing_fastlio_ready
+    log "using existing FAST-LIO Livox/odometry topics"
+    USING_EXISTING_FASTLIO=true
+  elif is_truthy "${RELOC_ALLOW_PRIVATE_FASTLIO}"; then
+    log "existing FAST-LIO topics not ready; falling back to private Livox/FAST-LIO"
+    STARTED_PRIVATE_FASTLIO=true
+  else
+    log "existing FAST-LIO topics not ready and private fallback is disabled"
+    exit 1
+  fi
+fi
 
-start_group fastlio "exec ros2 launch fast_lio mapping.launch.py rviz:=false start_livox_driver:=false config_file:='${RELOC_FASTLIO_CONFIG_FILE}'"
-record_timing fastlio_started
-wait_for_topic /Odometry_loc "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-wait_for_topic /cloud_registered_1 "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-record_timing fastlio_topics_ready
-wait_for_topic_message /Odometry_loc "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-wait_for_topic_message /cloud_registered_1 "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
-record_timing fastlio_messages_ready
-sleep "${RELOC_FASTLIO_SETTLE_SEC}"
-record_timing fastlio_settle_complete
+if [[ "${USING_EXISTING_FASTLIO}" != "true" ]]; then
+  STARTED_PRIVATE_FASTLIO=true
+  start_group livox 'exec ros2 launch livox_ros_driver2 msg_MID360s_launch.py'
+  record_timing livox_started
+  wait_for_topic /livox/lidar "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  wait_for_topic /livox/imu "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  record_timing livox_topics_ready
+  wait_for_topic_message /livox/lidar "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  wait_for_topic_message /livox/imu "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  record_timing livox_messages_ready
+  sleep "${RELOC_LIVOX_SETTLE_SEC}"
+  record_timing livox_settle_complete
+
+  start_group fastlio "exec ros2 launch fast_lio mapping.launch.py rviz:=false start_livox_driver:=false config_file:='${RELOC_FASTLIO_CONFIG_FILE}'"
+  record_timing fastlio_started
+  wait_for_topic /Odometry_loc "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  wait_for_topic /cloud_registered_1 "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  record_timing fastlio_topics_ready
+  wait_for_topic_message /Odometry_loc "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  wait_for_topic_message /cloud_registered_1 "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
+  record_timing fastlio_messages_ready
+  sleep "${RELOC_FASTLIO_SETTLE_SEC}"
+  record_timing fastlio_settle_complete
+fi
 
 start_group open3d_loc "exec ros2 launch open3d_loc open3d_loc_g1.launch.py rviz:=false map_file:='${RELOC_MAP_FILE}'"
 record_timing open3d_loc_started
 
 while true; do
-  for name in livox fastlio open3d_loc; do
+  names=(open3d_loc)
+  if [[ "${STARTED_PRIVATE_FASTLIO}" == "true" ]]; then
+    names=(livox fastlio open3d_loc)
+  fi
+  for name in "${names[@]}"; do
     pid_file="${SUNRAY_RUN_DIR}/${name}.pid"
     [[ -f "${pid_file}" ]] || { log "missing pid file for ${name}"; exit 1; }
     pid="$(cat "${pid_file}")"
