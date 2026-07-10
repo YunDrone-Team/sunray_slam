@@ -10,11 +10,24 @@ SLAM_MIN_BOOT_AGE_SEC="${SLAM_MIN_BOOT_AGE_SEC:-45}"
 LIVOX_HOST_IFACE="${LIVOX_HOST_IFACE:-eth0}"
 LIVOX_HOST_IP="${LIVOX_HOST_IP:-192.168.1.5}"
 STARTUP_TIMING_FILE="${STARTUP_TIMING_FILE:-${SUNRAY_RUN_DIR}/startup_timing.log}"
+FASTLIO_READY_PROBE="${FASTLIO_READY_PROBE:-}"
+FASTLIO_READY_WAIT_SEC="${FASTLIO_READY_WAIT_SEC:-120}"
+FASTLIO_READY_FILE="${FASTLIO_READY_FILE:-${SUNRAY_RUN_DIR}/fastlio.ready}"
+LOCALIZATION_STATUS_WRITER="${LOCALIZATION_STATUS_WRITER:-}"
+LOCALIZATION_REQUESTED_MODE="${LOCALIZATION_REQUESTED_MODE:-fastlio}"
 
 monotonic_ms() { awk '{printf "%d\n", $1 * 1000}' /proc/uptime; }
 SCRIPT_START_MONOTONIC_MS="$(monotonic_ms)"
 
 log() { printf '[sunray-fastlio] %s\n' "$*"; }
+
+report_stage() {
+  local phase="$1"
+  local progress="$2"
+  [[ -x "${LOCALIZATION_STATUS_WRITER}" ]] || return 0
+  "${LOCALIZATION_STATUS_WRITER}" update --mode "${LOCALIZATION_REQUESTED_MODE}" \
+    --phase "${phase}" --progress "${progress}" >/dev/null 2>&1 || true
+}
 
 record_timing() {
   local stage="$1" epoch_ms now_ms elapsed_ms
@@ -89,6 +102,14 @@ wait_for_host_ip() {
   exit 1
 }
 
+write_ready_marker() {
+  local boot_id temporary_file
+  boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+  temporary_file="${FASTLIO_READY_FILE}.tmp.$$"
+  printf '%s\n' "${boot_id}" > "${temporary_file}"
+  mv -f "${temporary_file}" "${FASTLIO_READY_FILE}"
+}
+
 cleanup() {
   "${SUNRAY_SLAM_ROOT}/scripts/stop_localization.sh" || true
 }
@@ -96,11 +117,13 @@ cleanup() {
 trap 'cleanup; exit 0' TERM INT
 
 mkdir -p "${SUNRAY_RUN_DIR}" "${SUNRAY_LOG_DIR}"
+rm -f "${FASTLIO_READY_FILE}"
 : > "${STARTUP_TIMING_FILE}"
 : > "${SUNRAY_LOG_DIR}/livox.log"
 : > "${SUNRAY_LOG_DIR}/fastlio.log"
 
 record_timing script_start
+report_stage livox_waiting 25
 wait_for_host_ip "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 record_timing livox_host_ip_ready
 wait_for_min_boot_age "${SLAM_MIN_BOOT_AGE_SEC}"
@@ -109,13 +132,26 @@ record_timing livox_started
 wait_for_topic /livox/lidar "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 wait_for_topic /livox/imu "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 record_timing livox_topics_ready
+report_stage livox_topics_ready 35
 wait_for_topic_message /livox/lidar "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 wait_for_topic_message /livox/imu "${LIVOX_TOPIC_WAIT_TIMEOUT_SEC}"
 record_timing livox_messages_ready
+report_stage livox_messages_ready 45
 sleep "${LIVOX_SETTLE_SEC}"
 record_timing livox_settle_complete
 start_group fastlio 'exec ros2 launch fast_lio mapping.launch.py rviz:=false start_livox_driver:=false'
 record_timing fastlio_started
+report_stage fastlio_initializing 55
+if [[ -n "${FASTLIO_READY_PROBE}" && -f "${FASTLIO_READY_PROBE}" ]]; then
+  log "waiting for validated FAST-LIO output"
+  python3 "${FASTLIO_READY_PROBE}" --timeout "${FASTLIO_READY_WAIT_SEC}"
+else
+  wait_for_topic_message /Odometry_loc "${FASTLIO_READY_WAIT_SEC}"
+  wait_for_topic_message /cloud_registered_1 "${FASTLIO_READY_WAIT_SEC}"
+fi
+write_ready_marker
+record_timing fastlio_ready
+report_stage fastlio_ready 70
 
 while true; do
   for name in livox fastlio; do

@@ -15,10 +15,22 @@ RELOC_LIVOX_HOST_IP="${RELOC_LIVOX_HOST_IP:-${LIVOX_HOST_IP:-192.168.1.5}}"
 RELOC_STARTUP_TIMING_FILE="${RELOC_STARTUP_TIMING_FILE:-${SUNRAY_RUN_DIR}/startup_timing.log}"
 RELOC_USE_EXISTING_FASTLIO="${RELOC_USE_EXISTING_FASTLIO:-false}"
 RELOC_ALLOW_PRIVATE_FASTLIO="${RELOC_ALLOW_PRIVATE_FASTLIO:-true}"
-RELOC_EXISTING_FASTLIO_WAIT_SEC="${RELOC_EXISTING_FASTLIO_WAIT_SEC:-30}"
+RELOC_EXISTING_FASTLIO_WAIT_SEC="${RELOC_EXISTING_FASTLIO_WAIT_SEC:-120}"
+RELOC_EXISTING_FASTLIO_PROBE="${RELOC_EXISTING_FASTLIO_PROBE:-}"
+RELOC_FASTLIO_READY_FILE="${RELOC_FASTLIO_READY_FILE:-}"
+RELOC_EXISTING_FASTLIO_PROBE_SEC="${RELOC_EXISTING_FASTLIO_PROBE_SEC:-${RELOC_FASTLIO_REUSE_PROBE_SEC:-15}}"
+LOCALIZATION_STATUS_WRITER="${LOCALIZATION_STATUS_WRITER:-}"
 
 log() {
   printf '[sunray-reloc] %s\n' "$*"
+}
+
+report_stage() {
+  local phase="$1"
+  local progress="$2"
+  [[ -x "${LOCALIZATION_STATUS_WRITER}" ]] || return 0
+  "${LOCALIZATION_STATUS_WRITER}" update --mode relocation \
+    --phase "${phase}" --progress "${progress}" >/dev/null 2>&1 || true
 }
 
 monotonic_ms() { awk '{printf "%d\n", $1 * 1000}' /proc/uptime; }
@@ -136,6 +148,10 @@ topic_message_ready() {
 
 existing_fastlio_ready() {
   local timeout_sec="$1"
+  if [[ -n "${RELOC_EXISTING_FASTLIO_PROBE}" && -f "${RELOC_EXISTING_FASTLIO_PROBE}" ]]; then
+    python3 "${RELOC_EXISTING_FASTLIO_PROBE}" --timeout "${timeout_sec}"
+    return
+  fi
   topic_ready /livox/lidar "${timeout_sec}" || return 1
   topic_ready /livox/imu "${timeout_sec}" || return 1
   topic_ready /Odometry_loc "${timeout_sec}" || return 1
@@ -144,6 +160,24 @@ existing_fastlio_ready() {
   topic_message_ready /livox/imu "${timeout_sec}" || return 1
   topic_message_ready /Odometry_loc "${timeout_sec}" || return 1
   topic_message_ready /cloud_registered_1 "${timeout_sec}" || return 1
+}
+
+wait_for_fastlio_ready_marker() {
+  local timeout_sec="$1"
+  local boot_id deadline marker_boot_id
+  [[ -n "${RELOC_FASTLIO_READY_FILE}" ]] || return 0
+  boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+  deadline=$((SECONDS + timeout_sec))
+  log "waiting for FAST-LIO ready marker for up to ${timeout_sec}s"
+  while (( SECONDS < deadline )); do
+    marker_boot_id="$(cat "${RELOC_FASTLIO_READY_FILE}" 2>/dev/null || true)"
+    if [[ "${marker_boot_id}" == "${boot_id}" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for FAST-LIO ready marker"
+  return 1
 }
 
 cleanup() {
@@ -170,6 +204,7 @@ mkdir -p "${SUNRAY_RUN_DIR}" "${SUNRAY_LOG_DIR}"
 : > "${SUNRAY_LOG_DIR}/open3d_loc.log"
 
 record_timing script_start
+report_stage checking_existing 15
 wait_for_host_ip "${RELOC_TOPIC_WAIT_TIMEOUT_SEC}"
 record_timing livox_host_ip_ready
 wait_for_min_boot_age "${RELOC_MIN_BOOT_AGE_SEC}"
@@ -178,9 +213,10 @@ record_timing min_boot_age_ready
 STARTED_PRIVATE_FASTLIO=false
 USING_EXISTING_FASTLIO=false
 if is_truthy "${RELOC_USE_EXISTING_FASTLIO}"; then
-  log "checking existing FAST-LIO topics for up to ${RELOC_EXISTING_FASTLIO_WAIT_SEC}s"
-  if existing_fastlio_ready "${RELOC_EXISTING_FASTLIO_WAIT_SEC}"; then
+  if wait_for_fastlio_ready_marker "${RELOC_EXISTING_FASTLIO_WAIT_SEC}" && \
+    existing_fastlio_ready "${RELOC_EXISTING_FASTLIO_PROBE_SEC}"; then
     record_timing existing_fastlio_ready
+    report_stage fastlio_ready 70
     log "using existing FAST-LIO Livox/odometry topics"
     USING_EXISTING_FASTLIO=true
   elif is_truthy "${RELOC_ALLOW_PRIVATE_FASTLIO}"; then
@@ -219,6 +255,8 @@ fi
 
 start_group open3d_loc "exec ros2 launch open3d_loc open3d_loc_g1.launch.py rviz:=false map_file:='${RELOC_MAP_FILE}'"
 record_timing open3d_loc_started
+report_stage reloc_map_loading 80
+report_stage reloc_aligning 88
 
 while true; do
   names=(open3d_loc)
