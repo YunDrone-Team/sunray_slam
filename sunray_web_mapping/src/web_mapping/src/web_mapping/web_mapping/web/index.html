@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Mapping</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>Web Mapping</h1>
+          </div>
+        </div>
+        <div class="layer-settings-toolbar" aria-label="图层渲染设置">
+          <button
+            id="layerSettingsToggle"
+            class="layer-settings-summary"
+            type="button"
+            aria-expanded="false"
+            aria-controls="layerSettingsPopover"
+          >
+            <span class="layer-settings-title">图层</span>
+            <span class="layer-settings-metric">
+              <span>总点数</span>
+              <strong id="bufferPoints">0</strong>
+            </span>
+          </button>
+          <div id="layerSettingsPopover" class="layer-settings-popover" hidden>
+            <div class="popover-header">
+              <div class="popover-title">
+                <span>Point Cloud</span>
+                <strong>图层设置</strong>
+                <p>渲染预算与点大小</p>
+              </div>
+              <button id="clearCloud" class="layer-clear-button" type="button">清空点云</button>
+            </div>
+            <div class="popover-body">
+              <label class="layer-range" for="pointSize">
+                <span>点大小</span>
+                <strong id="pointSizeValue">1.0 px</strong>
+                <input id="pointSize" type="range" min="0.5" max="10" step="0.1" value="1.0" />
+              </label>
+              <label class="layer-range" for="pointBudget">
+                <span>显示预算</span>
+                <strong id="pointBudgetValue">3.00M</strong>
+                <input id="pointBudget" type="range" min="20000" max="10000000" step="20000" value="3000000" />
+              </label>
+              <div class="layer-counts-compact">
+                <div><span>后处理地图</span><strong id="mapPoints">0</strong></div>
+                <div><span>里程计地图</span><strong id="optimizedPoints">0</strong></div>
+                <div><span>雷达原始扫描</span><strong id="rawPoints">0</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer-toolbar" aria-label="Point cloud layers">
+          <button class="layer-toggle is-active is-unavailable" type="button" data-source="map" aria-pressed="true">
+            <span class="layer-led" aria-hidden="true"></span>
+            <span class="layer-text">后处理地图</span>
+            <small class="layer-status">waiting</small>
+          </button>
+          <button class="layer-toggle is-active is-unavailable" type="button" data-source="optimized" aria-pressed="true">
+            <span class="layer-led" aria-hidden="true"></span>
+            <span class="layer-text">里程计地图</span>
+            <small class="layer-status">waiting</small>
+          </button>
+          <button class="layer-toggle is-active is-unavailable" type="button" data-source="raw" aria-pressed="true">
+            <span class="layer-led" aria-hidden="true"></span>
+            <span class="layer-text">雷达原始扫描</span>
+            <small class="layer-status">waiting</small>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="viewport-panel">
+          <canvas id="pointCanvas"></canvas>
+          <div class="viewport-file" aria-label="画布帧率">
+            <span id="hudFrame" class="viewport-fps">FPS --</span>
+          </div>
+          <div class="viewport-camera-actions">
+            <div class="viewport-button-set" role="group" aria-label="视角控制">
+              <button id="resetView" class="viewport-action-button viewport-reset-button" type="button">
+                重置视角
+              </button>
+              <button id="followPose" class="viewport-action-button" type="button" aria-pressed="false">
+                跟踪
+              </button>
+            </div>
+          </div>
+          <div class="viewport-trajectory-actions">
+            <div class="viewport-button-set" role="group" aria-label="轨迹控制">
+              <button id="toggleTrajectory" class="viewport-action-button is-active" type="button" aria-pressed="true">
+                显示轨迹
+              </button>
+              <button id="clearTrajectory" class="viewport-action-button" type="button" disabled>
+                清空轨迹
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel-section mapping-control-section">
+            <button class="section-toggle" type="button" aria-expanded="true">
+              <span>建图</span>
+              <span class="section-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="section-content mapping-control">
+              <div class="mapping-subcard">
+                <div class="mapping-subcard-title">
+                  <span>当前建图</span>
+                </div>
+                <div class="mapping-state-card">
+                  <div>
+                    <span>状态</span>
+                    <strong id="mappingState" class="state-pill is-waiting">ready</strong>
+                  </div>
+                  <p id="mappingMessage">等待开始</p>
+                </div>
+                <div class="mapping-form">
+                  <label for="mappingSessionName">
+                    <span>地图名称</span>
+                    <input id="mappingSessionName" type="text" placeholder="留空自动命名" autocomplete="off" disabled />
+                  </label>
+                </div>
+                <div class="mapping-actions">
+                  <button id="startLidar" class="mapping-action" type="button" disabled>启动雷达</button>
+                  <button id="stopLidar" class="mapping-action" type="button" disabled>关闭雷达</button>
+                  <button id="checkLidar" class="mapping-action" type="button" disabled>检测雷达</button>
+                  <button id="startMapping" class="mapping-action is-primary" type="button" disabled>开始建图</button>
+                  <button id="stopMapping" class="mapping-action" type="button" disabled>停止建图</button>
+                </div>
+              </div>
+
+              <div class="mapping-subcard">
+                <div class="mapping-subcard-title">
+                  <span>地图库</span>
+                  <button id="refreshHistory" class="history-refresh" type="button">刷新</button>
+                </div>
+                <div class="map-history">
+                  <div class="history-head">
+                    <span id="historySummary"></span>
+                  </div>
+                  <div id="historyList" class="history-list">
+                    <p class="history-empty">等待读取</p>
+                  </div>
+                  <div class="history-toolbar" aria-label="地图库操作">
+                    <div class="history-toolbar-actions">
+                      <button id="historyPreviewSelected" class="history-tool-button" type="button" disabled title="显示选中地图" aria-label="显示选中地图">
+                        <img src="./assets/play.png" alt="" aria-hidden="true" />
+                      </button>
+                      <a id="historyDownloadSelected" class="history-tool-button is-link" href="#" aria-disabled="true" title="下载选中地图" aria-label="下载选中地图">
+                        <img src="./assets/download.png" alt="" aria-hidden="true" />
+                      </a>
+                      <button id="historyDeleteSelected" class="history-tool-button is-danger" type="button" disabled title="删除选中地图" aria-label="删除选中地图">
+                        <img src="./assets/delete.svg" alt="" aria-hidden="true" />
+                      </button>
+                      <select id="historyPostprocessPreset" class="history-toolbar-select" title="重跑后处理档位" aria-label="重跑后处理档位" disabled>
+                        <option value="light">轻量</option>
+                        <option value="default">默认</option>
+                        <option value="detail">细节</option>
+                      </select>
+                      <button id="historyPostprocessSelected" class="history-tool-button" type="button" disabled title="重跑选中地图后处理" aria-label="重跑选中地图后处理">
+                        <span aria-hidden="true">↻</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <button class="section-toggle" type="button" aria-expanded="true">
+              <span>传感器详情</span>
+              <span class="section-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="section-content">
+              <div class="sensor-overview">
+                <div class="sensor-tile">
+                  <span>连接</span>
+                  <strong id="wsState" class="state-pill is-waiting">connecting</strong>
+                </div>
+                <div class="sensor-tile">
+                  <span>客户端</span>
+                  <strong id="clientCount">0</strong>
+                </div>
+                <div class="sensor-tile">
+                  <span>数据延迟</span>
+                  <strong id="sensorDataAge">-</strong>
+                </div>
+                <div class="sensor-tile">
+                  <span>状态</span>
+                  <strong id="sensorHealthState" class="state-pill">waiting</strong>
+                </div>
+              </div>
+
+              <div class="sensor-card">
+                <div class="sensor-card-head">
+                  <span>雷达</span>
+                  <strong id="radarDetailState" class="state-pill is-disconnected">disconnected</strong>
+                </div>
+                <div class="sensor-metrics">
+                  <div class="sensor-metric sensor-metric-wide">
+                    <span>Topic</span>
+                    <strong id="radarTopic">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>频率</span>
+                    <strong id="radarHz">0 Hz</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>延迟</span>
+                    <strong id="radarAge">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>点数</span>
+                    <strong id="radarPoints">0</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sensor-card">
+                <div class="sensor-card-head">
+                  <span>Web 可视化</span>
+                  <strong id="webVizState" class="state-pill">waiting</strong>
+                </div>
+                <div class="sensor-metrics">
+                  <div class="sensor-metric">
+                    <span>点云帧率</span>
+                    <strong id="webVizHz">0 Hz</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>接收延迟</span>
+                    <strong id="webVizAge">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>显示点数</span>
+                    <strong id="webVizPoints">0</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>原始点数</span>
+                    <strong id="webVizSourcePoints">0</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sensor-card">
+                <div class="sensor-card-head">
+                  <span>IMU</span>
+                  <strong id="imuState" class="state-pill">waiting</strong>
+                </div>
+                <div class="sensor-metrics">
+                  <div class="sensor-metric">
+                    <span>频率</span>
+                    <strong id="imuHz">0 Hz</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>延迟</span>
+                    <strong id="imuAge">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>|Acc|</span>
+                    <strong id="imuAccelNorm">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>|Gyro|</span>
+                    <strong id="imuGyroNorm">-</strong>
+                  </div>
+                  <div class="sensor-metric sensor-metric-wide">
+                    <span>Frame</span>
+                    <strong id="imuFrame">-</strong>
+                  </div>
+                </div>
+                <details class="sensor-detail">
+                  <summary>XYZ 细节</summary>
+                  <div class="sensor-readout" id="imuReadout">等待数据</div>
+                </details>
+              </div>
+
+              <div class="sensor-card">
+                <div class="sensor-card-head">
+                  <span>位姿</span>
+                  <strong id="poseState" class="state-pill">waiting</strong>
+                </div>
+                <div class="sensor-metrics">
+                  <div class="sensor-metric">
+                    <span>频率</span>
+                    <strong id="poseHz">0 Hz</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>延迟</span>
+                    <strong id="poseAge">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>X</span>
+                    <strong id="poseX">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>Y</span>
+                    <strong id="poseY">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>Z</span>
+                    <strong id="poseZ">-</strong>
+                  </div>
+                  <div class="sensor-metric">
+                    <span>Yaw</span>
+                    <strong id="poseYaw">-</strong>
+                  </div>
+                  <div class="sensor-metric sensor-metric-wide">
+                    <span>Frame</span>
+                    <strong id="poseFrame">-</strong>
+                  </div>
+                </div>
+                <details class="sensor-detail">
+                  <summary>位姿细节</summary>
+                  <div class="sensor-readout" id="poseReadout">等待数据</div>
+                </details>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-section is-collapsed">
+            <button class="section-toggle" type="button" aria-expanded="false">
+              <span>后端详情</span>
+              <span class="section-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="section-content backend-details">
+              <h3>输入</h3>
+              <div class="topic-list">
+                <div class="topic-row" data-topic-key="pose">
+                  <span>位姿输入</span>
+                  <strong class="topic-state">waiting</strong>
+                  <em class="topic-meta">-</em>
+                </div>
+                <div class="topic-row" data-topic-key="raw">
+                  <span>雷达原始扫描</span>
+                  <strong class="topic-state">waiting</strong>
+                  <em class="topic-meta">-</em>
+                </div>
+              </div>
+              <h3>输出</h3>
+              <div class="topic-list">
+                <div class="topic-row" data-topic-key="map">
+                  <span>后处理地图</span>
+                  <strong class="topic-state">waiting</strong>
+                  <em class="topic-meta">-</em>
+                </div>
+                <div class="topic-row" data-topic-key="optimized">
+                  <span>里程计地图</span>
+                  <strong class="topic-state">waiting</strong>
+                  <em class="topic-meta">-</em>
+                </div>
+                <div class="topic-row" data-topic-key="optimized_path">
+                  <span>轨迹</span>
+                  <strong class="topic-state">waiting</strong>
+                  <em class="topic-meta">-</em>
+                </div>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

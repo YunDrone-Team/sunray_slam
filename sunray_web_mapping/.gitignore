@@ -1,0 +1,16 @@
+build/
+install/
+log/
+maps/
+.runtime/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# FAST-LIO upstream docs and runtime outputs are not needed for this workspace repo.
+src/fast_lio/.github/
+src/fast_lio/doc/
+src/fast_lio/Log/
+src/fast_lio/PCD/
+src/fast_lio/.gitmodules

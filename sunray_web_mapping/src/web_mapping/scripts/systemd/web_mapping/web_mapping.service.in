@@ -1,0 +1,22 @@
+[Unit]
+Description=Web Mapping Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@WEB_MAPPING_USER@
+Group=@WEB_MAPPING_GROUP@
+WorkingDirectory=@WEB_MAPPING_WORKSPACE@
+Environment=HOME=@WEB_MAPPING_HOME@
+Environment=WEB_MAPPING_WORKSPACE=@WEB_MAPPING_WORKSPACE@
+EnvironmentFile=-@WEB_MAPPING_ENV_FILE@
+ExecStart=@WEB_MAPPING_RUNNER@
+
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

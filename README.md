@@ -8,6 +8,7 @@ Layout:
 - `open3d_loc/`: global localization package used by reloc.
 - `livox_ros_driver2/`: Livox ROS2 driver package.
 - `Livox-SDK2/`: Livox lidar SDK, tracked as a git submodule.
+- `sunray_web_mapping/`: browser-based FAST-LIO2 mapping workspace; reuses the root Livox driver.
 - `scripts/`: generic ROS2 runtime helpers for building and launching FAST-LIO/reloc.
 - `config/`: example environment files for those runtime helpers.
 - `data/`: point-cloud maps used by relocalization.
@@ -34,6 +35,15 @@ Example ROS2 Humble workspace build:
 
 ```bash
 LOCALIZATION_WS_ROOT=/tmp/sunray_slam_ws scripts/build_localization_ws.sh
+```
+
+Prepare and build the Web mapping workspace with the same Livox driver source:
+
+```bash
+cd sunray_web_mapping
+./scripts/setup_workspace.sh
+source /opt/ros/humble/setup.bash
+colcon build --cmake-args -DROS_EDITION=ROS2
 ```
 
 Run FAST-LIO:
