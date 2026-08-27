@@ -110,7 +110,7 @@ def parse_tcpdump(output: str, iface: str, verbose: bool = False) -> Discovery:
                 line,
             )
             if match:
-                host_ip, lidar_ip = match.groups()
+                lidar_ip, host_ip = match.groups()
                 verbose_print(verbose, f"ARP request: lidar_ip={lidar_ip}, requested_host_ip={host_ip}")
                 if result.lidar_ip is None or result.lidar_ip == lidar_ip:
                     result.lidar_ip = lidar_ip
