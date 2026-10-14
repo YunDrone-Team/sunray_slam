@@ -46,6 +46,9 @@ class ImuProcess
   void set_acc_cov(const V3D &scaler);
   void set_gyr_bias_cov(const V3D &b_g);
   void set_acc_bias_cov(const V3D &b_a);
+  // 加速度量纲归一化系数：静态初始化得到的 mean_acc 模长与 g 的比值。
+  // 高频里程计要用它把 IMU 原始加速度折算成 m/s^2。
+  double acceleration_scale() const;
   Eigen::Matrix<double, 12, 12> Q;
   void Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI::Ptr pcl_un_);
 
@@ -151,6 +154,12 @@ void ImuProcess::set_gyr_bias_cov(const V3D &b_g)
 void ImuProcess::set_acc_bias_cov(const V3D &b_a)
 {
   cov_bias_acc = b_a;
+}
+
+double ImuProcess::acceleration_scale() const
+{
+  const double mean_acc_norm = mean_acc.norm();
+  return mean_acc_norm > 1e-6 ? G_m_s2 / mean_acc_norm : 1.0;
 }
 
 void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N)

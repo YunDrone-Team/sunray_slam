@@ -145,6 +145,133 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
+// ---------------------------------------------------------------------------
+// 200Hz 高频里程计：FAST-LIO 的激光帧只有 10Hz，但 IMU 有 200Hz。这里在两次
+// 激光更新之间用 IMU 积分外推位姿，另发布一路 /Odometry_loc_high_freq 供 EGO 与
+// CXR 订阅；每次激光帧收敛后再用滤波器的校正结果重新锚定，避免积分漂移累积。
+// ---------------------------------------------------------------------------
+struct HighFrequencyOdometryState
+{
+    bool initialized = false;
+    double timestamp = 0.0;
+    V3D position = Zero3d;
+    V3D velocity = Zero3d;
+    V3D accel_bias = Zero3d;
+    V3D gyro_bias = Zero3d;
+    V3D gravity = Zero3d;
+    V3D previous_accel = Zero3d;
+    V3D previous_gyro = Zero3d;
+    M3D rotation = Eye3d;
+    deque<sensor_msgs::msg::Imu::SharedPtr> imu_history;
+};
+
+HighFrequencyOdometryState high_freq_odom;
+mutex high_freq_odom_mutex;
+
+V3D imu_acceleration(const sensor_msgs::msg::Imu &imu)
+{
+    return V3D(imu.linear_acceleration.x, imu.linear_acceleration.y,
+               imu.linear_acceleration.z) * p_imu->acceleration_scale();
+}
+
+V3D imu_angular_velocity(const sensor_msgs::msg::Imu &imu)
+{
+    return V3D(imu.angular_velocity.x, imu.angular_velocity.y,
+               imu.angular_velocity.z);
+}
+
+nav_msgs::msg::Odometry make_high_frequency_odometry(const V3D &angular_velocity)
+{
+    nav_msgs::msg::Odometry odom;
+    odom.header.stamp = get_ros_time(high_freq_odom.timestamp);
+    odom.header.frame_id = "camera_init";
+    odom.child_frame_id = "body";
+    odom.pose.pose.position.x = high_freq_odom.position.x();
+    odom.pose.pose.position.y = high_freq_odom.position.y();
+    odom.pose.pose.position.z = high_freq_odom.position.z();
+    const Eigen::Quaterniond orientation(high_freq_odom.rotation);
+    odom.pose.pose.orientation.x = orientation.x();
+    odom.pose.pose.orientation.y = orientation.y();
+    odom.pose.pose.orientation.z = orientation.z();
+    odom.pose.pose.orientation.w = orientation.w();
+    odom.twist.twist.linear.x = high_freq_odom.velocity.x();
+    odom.twist.twist.linear.y = high_freq_odom.velocity.y();
+    odom.twist.twist.linear.z = high_freq_odom.velocity.z();
+    const V3D unbiased_gyro = angular_velocity - high_freq_odom.gyro_bias;
+    odom.twist.twist.angular.x = unbiased_gyro.x();
+    odom.twist.twist.angular.y = unbiased_gyro.y();
+    odom.twist.twist.angular.z = unbiased_gyro.z();
+    return odom;
+}
+
+bool propagate_high_frequency_odometry(const sensor_msgs::msg::Imu &imu,
+                                       nav_msgs::msg::Odometry &odom)
+{
+    if (!high_freq_odom.initialized) return false;
+    const double timestamp = get_time_sec(imu.header.stamp);
+    const double dt = timestamp - high_freq_odom.timestamp;
+    if (dt <= 1e-6) return false;
+    // 间隔过大说明 IMU 断流，此时积分已不可信，等下一次激光帧重新锚定。
+    if (dt > 0.1) { high_freq_odom.initialized = false; return false; }
+    const V3D accel = imu_acceleration(imu);
+    const V3D gyro = imu_angular_velocity(imu);
+    const V3D accel_world_0 = high_freq_odom.rotation *
+        (high_freq_odom.previous_accel - high_freq_odom.accel_bias) + high_freq_odom.gravity;
+    const V3D unbiased_gyro = 0.5 * (high_freq_odom.previous_gyro + gyro) - high_freq_odom.gyro_bias;
+    high_freq_odom.rotation = high_freq_odom.rotation * Exp(unbiased_gyro, dt);
+    const V3D accel_world_1 = high_freq_odom.rotation *
+        (accel - high_freq_odom.accel_bias) + high_freq_odom.gravity;
+    // 中点法积分：两端加速度取平均，比单端欧拉稳定。
+    const V3D accel_world = 0.5 * (accel_world_0 + accel_world_1);
+    high_freq_odom.position += dt * high_freq_odom.velocity + 0.5 * dt * dt * accel_world;
+    high_freq_odom.velocity += dt * accel_world;
+    high_freq_odom.previous_accel = accel;
+    high_freq_odom.previous_gyro = gyro;
+    high_freq_odom.timestamp = timestamp;
+    odom = make_high_frequency_odometry(gyro);
+    return true;
+}
+
+void anchor_high_frequency_odometry(
+    const state_ikfom &corrected_state, double corrected_timestamp,
+    const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &publisher)
+{
+    nav_msgs::msg::Odometry odom;
+    bool should_publish = false;
+    {
+        lock_guard<mutex> lock(high_freq_odom_mutex);
+        sensor_msgs::msg::Imu::SharedPtr previous_imu;
+        for (const auto &imu : high_freq_odom.imu_history) {
+            if (get_time_sec(imu->header.stamp) <= corrected_timestamp) previous_imu = imu;
+            else break;
+        }
+        if (!previous_imu) { high_freq_odom.initialized = false; return; }
+        // 用激光帧的校正结果重置积分状态。
+        high_freq_odom.timestamp = corrected_timestamp;
+        high_freq_odom.position = corrected_state.pos;
+        high_freq_odom.rotation = corrected_state.rot.toRotationMatrix();
+        high_freq_odom.velocity = corrected_state.vel;
+        high_freq_odom.accel_bias = corrected_state.ba;
+        high_freq_odom.gyro_bias = corrected_state.bg;
+        high_freq_odom.gravity = V3D(corrected_state.grav[0], corrected_state.grav[1], corrected_state.grav[2]);
+        high_freq_odom.previous_accel = imu_acceleration(*previous_imu);
+        high_freq_odom.previous_gyro = imu_angular_velocity(*previous_imu);
+        high_freq_odom.initialized = true;
+        // 把激光帧之后已经到达的 IMU 重新推一遍，补齐这段时间的位姿。
+        for (const auto &imu : high_freq_odom.imu_history) {
+            if (get_time_sec(imu->header.stamp) > corrected_timestamp) {
+                if (propagate_high_frequency_odometry(*imu, odom)) should_publish = true;
+                else if (!high_freq_odom.initialized) { should_publish = false; break; }
+            }
+        }
+        if (!should_publish && high_freq_odom.initialized) {
+            odom = make_high_frequency_odometry(high_freq_odom.previous_gyro);
+            should_publish = true;
+        }
+    }
+    if (should_publish) publisher->publish(odom);
+}
+
 void SigHandle(int sig)
 {
     flg_exit = true;
@@ -359,7 +486,9 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
     sig_buffer.notify_all();
 }
 
-void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
+void imu_cbk(
+    const sensor_msgs::msg::Imu::UniquePtr msg_in,
+    const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &high_freq_publisher)
 {
     publish_count++;
     // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
@@ -373,6 +502,27 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
     }
 
     double timestamp = get_time_sec(msg->header.stamp);
+
+    // 高频里程计：缓存 IMU 供激光帧锚定后回放，并就地外推发布一帧位姿。
+    nav_msgs::msg::Odometry high_freq_message;
+    bool publish_high_freq = false;
+    {
+        lock_guard<mutex> lock(high_freq_odom_mutex);
+        if (!high_freq_odom.imu_history.empty() &&
+            timestamp < get_time_sec(high_freq_odom.imu_history.back()->header.stamp))
+        {
+            // 时间回跳（重启或时钟调整），历史作废，等下一次激光帧重新锚定。
+            high_freq_odom.imu_history.clear();
+            high_freq_odom.initialized = false;
+        }
+        high_freq_odom.imu_history.push_back(msg);
+        while (high_freq_odom.imu_history.size() > 2 &&
+               timestamp - get_time_sec(high_freq_odom.imu_history.front()->header.stamp) > 2.0)
+            high_freq_odom.imu_history.pop_front();
+        publish_high_freq = propagate_high_frequency_odometry(*msg, high_freq_message);
+    }
+    if (publish_high_freq)
+        high_freq_publisher->publish(high_freq_message);
 
     mtx_buffer.lock();
 
@@ -949,7 +1099,17 @@ public:
         {
             sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
         }
-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, imu_queue_size, imu_cbk);
+        // 高频里程计发布器：供 EGO / CXR 订阅的 200Hz 位姿。用 SensorDataQoS，
+        // 与订阅端保持一致，避免因可靠重传引入延迟。
+        pubOdomHighFreq_ = this->create_publisher<nav_msgs::msg::Odometry>(
+            "/Odometry_loc_high_freq", rclcpp::SensorDataQoS());
+        // IMU 回调需要拿到发布器，这里用 lambda 透传；队列深度仍沿用 imu_queue_size。
+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
+            imu_topic, imu_queue_size,
+            [this](sensor_msgs::msg::Imu::UniquePtr msg)
+            {
+                imu_cbk(std::move(msg), pubOdomHighFreq_);
+            });
         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_1", 20);
         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body_1", 20);
         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected_1", 20);
@@ -1080,6 +1240,9 @@ private:
             geoQuat.z = state_point.rot.coeffs()[2];
             geoQuat.w = state_point.rot.coeffs()[3];
 
+            // 激光帧收敛：用校正后的状态重新锚定高频里程计，并回放期间积压的 IMU。
+            anchor_high_frequency_odometry(state_point, lidar_end_time, pubOdomHighFreq_);
+
             double t_update_end = omp_get_wtime();
 
             /******* Publish odometry *******/
@@ -1163,6 +1326,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudEffect_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudMap_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomAftMapped_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomHighFreq_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
